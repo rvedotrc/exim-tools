@@ -1,0 +1,125 @@
+#!/usr/bin/perl
+
+use warnings;
+use strict;
+
+use FindBin;
+use lib $FindBin::Bin;
+
+use EximQueue;
+
+my $dir = EximQueue->DEFAULT_QUEUE_DIR;
+my $rcpt_type = "todo";
+my $top_n = 10;
+use Getopt::Long;
+GetOptions(
+	"directory|d=s"		=> \$dir,
+	"recipient-type|rt=s"	=> sub {
+		$_[1] =~ /^(done|todo|all)$/ or die;
+		$rcpt_type = $1;
+	},
+	"top=i"			=> \$top_n,
+) or exit 2;
+
+my $q = EximQueue->new($dir);
+
+my $filter = EximQueueItem->compile_filter(join " ", @ARGV);
+
+my $total_count = 0;
+my $total_rcpts = 0;
+my $total_size = 0;
+
+my %count_by_senderdom;
+my %size_by_senderdom;
+my %rcpt_by_senderdom;
+
+my %countrcpt_by_rcpt;
+my %countrcpt_by_rcptdom;
+
+my %count_by_ip;
+my %size_by_ip;
+my %rcpt_by_ip;
+
+my %count_by_subject;
+
+my $sub = sub {
+	my $p = shift;
+	$p->matches_filter($filter) or return;
+
+	my $peer = $p->get_sending_peer;
+	my $ip = $peer->{ip} || "local";
+	my $r = $p->{rcpt};
+
+	if ($rcpt_type ne "all")
+	{
+		my $truth = ($rcpt_type eq "done");
+		while (my ($k, $v) = each %$r)
+		{
+			delete $r->{$k} if $v xor $truth;
+		}
+	}
+
+	(my $senderdom) = $p->{sender} =~ /\@([^\@]+)$/;
+	if (defined $senderdom)
+	{
+		$senderdom = lc $senderdom;
+	} else {
+		$senderdom = "<>";
+	}
+
+	$total_count += 1;
+	$total_size += $p->{size};
+	$total_rcpts += scalar keys %$r;
+
+	$count_by_ip{$ip} += 1;
+	$size_by_ip{$ip} += $p->{size};
+	$rcpt_by_ip{$ip} += scalar keys %$r;
+
+	$count_by_senderdom{$senderdom} += 1;
+	$size_by_senderdom{$senderdom} += $p->{size};
+	$rcpt_by_senderdom{$senderdom} += scalar keys %$r;
+
+	my $subject = $p->get_header("Subject");
+	$subject = "<blank subject>" if not defined $subject;
+	$count_by_subject{$subject} += 1;
+
+	for (keys %$r)
+	{
+		++$countrcpt_by_rcpt{$_};
+		/\@([^\@]+)$/;
+		++$countrcpt_by_rcptdom{lc $1};
+	}
+};
+
+$q->scan($sub);
+
+top_ten(\%count_by_ip, $total_count, "Top $top_n sending IPs (by number of messages)");
+top_ten(\%size_by_ip, $total_size, "Top $top_n sending IPs (by message size)");
+top_ten(\%rcpt_by_ip, $total_rcpts, "Top $top_n sending IPs (by number of recipients)");
+
+top_ten(\%count_by_senderdom, $total_count, "Top $top_n sender domains (by number of messages)");
+top_ten(\%size_by_senderdom, $total_size, "Top $top_n sender domains (by message size)");
+top_ten(\%rcpt_by_senderdom, $total_rcpts, "Top $top_n sender domains (by number of recipients)");
+
+top_ten(\%count_by_subject, $total_count, "Top $top_n subjects (by number of messages)");
+top_ten(\%countrcpt_by_rcpt, $total_rcpts, "Top $top_n recipients");
+top_ten(\%countrcpt_by_rcptdom, $total_rcpts, "Top $top_n recipient domains");
+
+sub top_ten
+{
+	my ($hash, $total, $title) = @_;
+	my @keys = sort {
+		$hash->{$b} <=> $hash->{$a}
+		or
+		$a cmp $b
+      	} keys %$hash;
+	splice(@keys, $top_n) if @keys > $top_n;
+	@keys or return;
+
+	print "$title\n";
+	printf "%10d  %5.1f%%  %s\n", $hash->{$_}, 100*$hash->{$_}/$total, $_
+		for @keys;
+	print "\n";
+}
+
+# eof

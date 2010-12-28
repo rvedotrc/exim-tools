@@ -1,0 +1,13 @@
+#!/bin/sh
+
+BASE=$1
+
+umask 027
+mkdir -p "$BASE"
+mkdir -p "$BASE"/db
+mkdir -p "$BASE"/input
+mkdir -p "$BASE"/msglog
+mkdir -p "$BASE"/scan
+chown -R exim:exim "$BASE"
+
+# eof

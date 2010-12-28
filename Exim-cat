@@ -1,0 +1,50 @@
+#!/usr/bin/perl
+
+use warnings;
+use strict;
+
+use FindBin;
+use lib $FindBin::Bin;
+
+use EximQueue;
+
+my $dir = EximQueue->DEFAULT_QUEUE_DIR;
+use Getopt::Long;
+GetOptions(
+	"directory|d=s"	=> \$dir,
+) or exit 2;
+
+my $q = EximQueue->new($dir);
+
+my $filter = EximQueueItem->compile_filter(join " ", @ARGV);
+
+my $sub = sub {
+	my $p = shift;
+	$p->matches_filter($filter) or return;
+
+	my $peer = $p->get_sending_peer;
+
+	printf "X-Sending-Peer: %s (HELO=%s) (PTR=%s)\n",
+		$peer->{ip} || "local",
+		$peer->{helo} || "none",
+		$peer->{ptr} || "none",
+		;
+
+	printf "X-Mail-From: %s\n", $p->{sender} || "<>";
+
+	my $r = $p->{rcpt};
+	printf "X-Sent-Rcpt-To: %s\n", $_
+		for sort grep { $r->{$_} } keys %$r;
+	printf "X-Todo-Rcpt-To: %s\n", $_
+		for sort grep { not $r->{$_} } keys %$r;
+	print $_, "\n" for @{ $p->{headers} };
+	print "\n";
+	my $fh = $p->{body_fh};
+	while (<$fh>) { print }
+
+	print "\n", "#" x 80, "\n\n";
+};
+
+$q->scan($sub);
+
+# eof

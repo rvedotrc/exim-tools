@@ -1,0 +1,45 @@
+#!/bin/sh
+
+set -o errexit
+
+[ $# = 1 ] || {
+	echo Usage: $0 ADDR-OR-DOMAIN >&2
+	exit 2
+}
+
+BOUNCETO=$1
+
+# Stop Exim
+echo Stopping Exim
+service exim stop || true
+
+while service exim status
+do
+	sleep 1
+	service exim stop || true
+done
+
+# Make a new queue for the spam to go into
+SPAMQUEUE=/tmp/spam-`date +'%Y%m%d-%H%M%S'`-$BOUNCETO
+echo Creating new queue at $SPAMQUEUE
+Exim-mkqueue $SPAMQUEUE
+
+# Run Exim-foreach, moving the spam into the new queue
+export BOUNCETO SPAMQUEUE
+echo Moving mail from $BOUNCETO into $SPAMQUEUE
+Exim-foreach <<'EOF'
+	# next if defined $peer->{ip};
+	next if $p->{sender};
+	next if grep { lc($_) ne lc($ENV{BOUNCETO}) and not /\@\Q$ENV{BOUNCETO}\E$/i } keys %{ $p->{'rcpt'} };
+	printf "Moving %s\n", $p->{message_id};
+	$p->move_to_queue($ENV{SPAMQUEUE});
+EOF
+
+# Restart Exim
+echo Starting Exim
+service exim start
+
+# Tell the user what we did
+echo "Bounces for $BOUNCETO have now been moved into $SPAMQUEUE"
+
+# eof

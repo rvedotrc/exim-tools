@@ -1,0 +1,89 @@
+#!/usr/bin/perl
+
+use warnings;
+use strict;
+
+use FindBin;
+use lib $FindBin::Bin;
+
+use EximQueue;
+
+my $dir = EximQueue->DEFAULT_QUEUE_DIR;
+my $rcpt_type = "todo";
+my $show_headers = undef;
+my $show_body = undef;
+my $show_locks = 0;
+use Getopt::Long;
+GetOptions(
+	"directory|d=s"	=> \$dir,
+	"recipient-type|rt=s"	=> sub {
+		$_[1] =~ /^(done|todo|all)$/ or die;
+		$rcpt_type = $1;
+	},
+	"show-headers:s"	=> \$show_headers,
+	"show-body:i"		=> \$show_body,
+	"show-locks"		=> \$show_locks,
+) or exit 2;
+
+my $filter = EximQueueItem->compile_filter(join " ", @ARGV);
+
+if ($show_headers)
+{
+	my $patt = join "|", map { quotemeta($_) } split /,/, $show_headers;
+	$show_headers = qr/^(?:$patt)\s*:/i;
+}
+
+my $q = EximQueue->new($dir);
+
+my $sub = sub {
+	my $p = shift;
+	$p->matches_filter($filter) or return;
+
+	my $peer = $p->get_sending_peer;
+
+	my $r = $p->{rcpt};
+
+	if ($rcpt_type ne "all")
+	{
+		my $truth = ($rcpt_type eq "done");
+		while (my ($k, $v) = each %$r)
+		{
+			delete $r->{$k} if $v xor $truth;
+		}
+	}
+
+	if ($show_locks)
+	{
+		my $got_lock = $p->lock;
+		printf "%s ", ($got_lock ? " " : "*");
+	}
+
+	printf "%s %s %d %s %s\n",
+		$p->{message_id},
+		$peer->{ip} || "localhost",
+		$p->{size},
+		$p->{sender} || "<>",
+		join(",", sort keys %$r),
+		;
+
+	if (defined $show_headers)
+	{
+		my $h = $p->{headers};
+		$h = [ grep { $_ =~ $show_headers } @$h ] if $show_headers;
+		print $_, "\n" for @$h;
+		print "\n";
+	}
+
+	if (defined $show_body)
+	{
+		my $fh = $p->{body_fh};
+		my $i = 0;
+		while (<$fh>) { print; ++$i; last if $show_body and $i >= $show_body }
+		print "(only first $i lines of body shown)\n" unless eof $fh;
+		print "\n";
+	}
+};
+
+$q->scan($sub);
+
+# eof

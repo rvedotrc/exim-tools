@@ -1,0 +1,60 @@
+#!/usr/bin/perl
+
+# exec "sudo", "-u", "exim", $0, @ARGV unless getpwnam($<) eq "exim";
+
+use warnings;
+use strict;
+
+use FindBin;
+use lib $FindBin::Bin;
+require SNMPAgentUtil;
+require EximMessageCounters;
+
+SNMPAgentUtil->run(
+	# log_to => "/dev/tty",
+	# log_to => "/tmp/exim_snmp_agent.log",
+	# get => \&get,
+	# get_next => \&get_next,
+	prepare_responses => \&prepare_responses,
+);
+
+{
+    my $expire = time;
+
+    sub prepare_responses
+    {
+        my ($self) = @_;
+
+        return if defined($expire) and time() < $expire;
+
+        my @responses;
+
+	# .1.3.6.1.4.1.204718080 = fake Powernet enterprise
+	#	.3 = exim
+	#	  .1 = queue contents
+	#	    .1 = count of messages in queue
+	#	    .2 = count of bytes in queue (approx)
+	#	  .2 = count of messages (senders) accepted to date
+	#	  .3 = count of recipients accepted to date
+	#	  .4 = count of messages completed to date
+
+	push @responses, ".1.3.6.1.4.1.204718080.3", "string", "dummy";
+	push @responses, ".1.3.6.1.4.1.204718080.3.1", "string", "dummy";
+	push @responses, ".1.3.6.1.4.1.204718080.3.1.1", "gauge", count_glob("/var/spool/exim/input/*D");
+	push @responses, ".1.3.6.1.4.1.204718080.3.1.2", "gauge", count_bytes("/var/spool/exim/input");
+
+	my ($messages, $recipients, $completed) = get_exim_counters();
+	push @responses, ".1.3.6.1.4.1.204718080.3.2", "counter", $messages;
+	push @responses, ".1.3.6.1.4.1.204718080.3.3", "counter", $recipients;
+	push @responses, ".1.3.6.1.4.1.204718080.3.4", "counter", $completed;
+
+        $self->set_responses(@responses);
+
+        $expire = time() + 10;
+    }
+}
+
+sub count_glob { my @g = glob $_[0]; return scalar @g }
+sub count_bytes { my $dir = $_[0]; my $o = `du --bytes -s $dir`; $o =~ /^(\d+)/; return $1 }
+
+# eof

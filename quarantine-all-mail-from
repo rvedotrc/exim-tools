@@ -1,0 +1,43 @@
+#!/bin/sh
+
+set -o errexit
+
+[ $# = 1 ] || {
+	echo Usage: $0 IPADDRESS >&2
+	exit 2
+}
+
+SPAMIP=$1
+
+# Stop Exim
+echo Stopping Exim
+service exim stop || true
+
+while service exim status
+do
+	sleep 1
+	service exim stop || true
+done
+
+# Make a new queue for the spam to go into
+SPAMQUEUE=/tmp/spam-`date +'%Y%m%d-%H%M%S'`-$SPAMIP
+echo Creating new queue at $SPAMQUEUE
+Exim-mkqueue $SPAMQUEUE
+
+# Run Exim-foreach, moving the spam into the new queue
+export SPAMIP SPAMQUEUE
+echo Moving mail from $SPAMIP into $SPAMQUEUE
+Exim-foreach <<'EOF'
+	next unless ($peer->{ip}||"") eq $ENV{SPAMIP};
+	printf "Moving %s\n", $p->{message_id};
+	$p->move_to_queue($ENV{SPAMQUEUE});
+EOF
+
+# Restart Exim
+echo Starting Exim
+service exim start
+
+# Tell the user what we did
+echo "Mail from $SPAMIP has now been moved into $SPAMQUEUE"
+
+# eof

@@ -1,0 +1,48 @@
+#!/usr/bin/perl
+
+use warnings;
+use strict;
+
+use FindBin;
+use lib $FindBin::Bin;
+
+use EximQueue;
+
+my $count;
+use Getopt::Long;
+GetOptions(
+	"count=i"	=> \$count,
+) or exit 2;
+
+my $fromdir = shift;
+my $todir = shift;
+-d $fromdir or die $!;
+-d $todir or die $!;
+
+my $q = EximQueue->new($fromdir);
+
+my $seq = 0;
+
+my $stop = 0;
+$SIG{INT} = sub {
+	if ($stop) { exit }
+	else { $stop = 1; print STDERR "Stopping\n"; }
+};
+
+my $sub = sub {
+	my $p = shift;
+
+	if (defined $count)
+	{
+		return if $count == 0;
+		--$count;
+	}
+
+	my $id = $p->{message_id};
+	print "Moving $id\n";
+	$p->move_to_queue($todir);
+};
+
+$q->scan($sub);
+
+# eof
